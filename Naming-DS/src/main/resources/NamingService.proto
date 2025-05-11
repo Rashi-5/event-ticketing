@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package naming;
+
+service NamingService {
+  rpc RegisterServer(RegisterServerRequest) returns (RegisterServerResponse);
+  rpc ListServers(Empty) returns (ListServersResponse);
+}
+
+message RegisterServerRequest {
+  string address = 1;
+  int32 port = 2;
+}
+
+message RegisterServerResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message Empty {}
+
+message ListServersResponse {
+  repeated ServerInfo servers = 1;
+}
+
+message ServerInfo {
+  string address = 1;
+  int32 port = 2;
+} 

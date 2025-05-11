@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package concert;
+
+service ConcertService {
+  // Organizer APIs
+  rpc AddConcert(AddConcertRequest) returns (ConcertResponse);
+  rpc UpdateConcert(UpdateConcertRequest) returns (ConcertResponse);
+  rpc CancelConcert(CancelConcertRequest) returns (ConcertResponse);
+
+  // Clerk APIs
+  rpc AddTicketStock(AddTicketStockRequest) returns (ConcertResponse);
+  rpc UpdateTicketPrice(UpdateTicketPriceRequest) returns (ConcertResponse);
+
+  // Customer APIs
+  rpc ListConcerts(Empty) returns (ListConcertsResponse);
+  rpc ReserveTickets(ReserveTicketsRequest) returns (ReservationResponse);
+
+  // Coordinator APIs
+  rpc BulkReserve(BulkReserveRequest) returns (ReservationResponse);
+}
+
+message Empty {}
+
+message Concert {
+  string id = 1;
+  string name = 2;
+  string date = 3;
+  map<string, int32> seat_tiers = 4; // e.g., {"VIP": 50, "Regular": 200}
+  int32 after_party_tickets = 5;
+  map<string, double> prices = 6; // e.g., {"VIP": 100.0, "Regular": 50.0}
+}
+
+message AddConcertRequest {
+  Concert concert = 1;
+}
+
+message UpdateConcertRequest {
+  Concert concert = 1;
+}
+
+message CancelConcertRequest {
+  string concert_id = 1;
+}
+
+message AddTicketStockRequest {
+  string concert_id = 1;
+  string tier = 2;
+  int32 count = 3;
+  bool after_party = 4;
+}
+
+message UpdateTicketPriceRequest {
+  string concert_id = 1;
+  string tier = 2;
+  double price = 3;
+}
+
+message ListConcertsResponse {
+  repeated Concert concerts = 1;
+}
+
+message ReserveTicketsRequest {
+  string concert_id = 1;
+  string tier = 2;
+  int32 count = 3;
+  bool after_party = 4;
+  string customer_id = 5;
+}
+
+message BulkReserveRequest {
+  string concert_id = 1;
+  string tier = 2;
+  int32 count = 3;
+  bool after_party = 4;
+  string group_id = 5;
+}
+
+message ConcertResponse {
+  bool success = 1;
+  string message = 2;
+  Concert concert = 3;
+}
+
+message ReservationResponse {
+  bool success = 1;
+  string message = 2;
+  string reservation_id = 3;
+} 
