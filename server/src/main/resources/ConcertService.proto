@@ -37,14 +37,17 @@ message Concert {
 
 message AddConcertRequest {
   Concert concert = 1;
+  bool is_sent_by_primary = 2;
 }
 
 message UpdateConcertRequest {
   Concert concert = 1;
+  bool is_sent_by_primary = 2;
 }
 
 message CancelConcertRequest {
   string concert_id = 1;
+  bool is_sent_by_primary = 2;
 }
 
 message AddTicketStockRequest {
@@ -52,13 +55,15 @@ message AddTicketStockRequest {
   string tier = 2;
   int32 count = 3;
   bool after_party = 4;
-  double price = 5; // Optional: set price for the tier if provided
+  double price = 5;
+  bool is_sent_by_primary = 6;
 }
 
 message UpdateTicketPriceRequest {
   string concert_id = 1;
   string tier = 2;
   double price = 3;
+  bool is_sent_by_primary = 4;
 }
 
 message ListConcertsResponse {
@@ -71,6 +76,7 @@ message ReserveTicketsRequest {
   int32 count = 3;
   bool after_party = 4;
   string customer_id = 5;
+  bool is_sent_by_primary = 6;
 }
 
 message BulkReserveRequest {
@@ -79,6 +85,7 @@ message BulkReserveRequest {
   int32 count = 3;
   bool after_party = 4;
   string group_id = 5;
+  bool is_sent_by_primary = 6;
 }
 
 message ConcertResponse {

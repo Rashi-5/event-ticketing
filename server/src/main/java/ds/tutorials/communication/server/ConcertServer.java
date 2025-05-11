@@ -57,13 +57,11 @@ public class ConcertServer {
     }
 
     public ConcertServer(String dataDir, int port, String nameServiceAddress) throws IOException, InterruptedException, KeeperException {
-
         this.serverPort = port;
         leaderLock = new DistributedLock("concert-lock");
-        commandService = new ConcertCommandServiceImpl(nameServiceAddress, dataDir);
+        commandService = new ConcertCommandServiceImpl(nameServiceAddress, dataDir, this);
         queryService = new ConcertQueryServiceImpl(commandService.getConcerts());
         reservation = new DistributedTxParticipant(commandService);
-
     }
 
     public void startServer () throws IOException, InterruptedException, KeeperException {
