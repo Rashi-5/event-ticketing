@@ -16,6 +16,7 @@ public class ConcertQueryServiceImpl extends ConcertQueryServiceGrpc.ConcertQuer
 
     @Override
     public void listConcerts(ConcertService.Empty request, StreamObserver<ConcertService.ListConcertsResponse> responseObserver) {
+        System.out.println("[Query] Received listConcerts request");
         ConcertService.ListConcertsResponse response = ConcertService.ListConcertsResponse.newBuilder()
                 .addAllConcerts(concerts.values().stream().map(ConcertService.Concert.Builder::build).collect(Collectors.toList()))
                 .build();
@@ -26,6 +27,7 @@ public class ConcertQueryServiceImpl extends ConcertQueryServiceGrpc.ConcertQuer
 
     @Override
     public void checkConcert(ConcertService.getConcertRequest request, StreamObserver<ConcertService.ConcertsResponse> responseObserver) {
+        System.out.println("[Query] Received checkConcert request for concert ID: " + request.getConcertId());
         ConcertService.ConcertsResponse response = ConcertService.ConcertsResponse.newBuilder()
                 .build();
 

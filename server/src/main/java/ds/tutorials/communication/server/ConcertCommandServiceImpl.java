@@ -122,6 +122,8 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
 
     @Override
     public void addConcert(ConcertService.AddConcertRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
+        System.out.println("[Command] Received addConcert request - Concert: " + request.getConcert().getName() + 
+            " (ID: " + request.getConcert().getId() + ", Date: " + request.getConcert().getDate() + ")");
         try {
 //            concertLock.acquireLock();
             try {
@@ -149,6 +151,8 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
 
     @Override
     public void updateConcert(ConcertService.UpdateConcertRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
+        System.out.println("[Command] Received updateConcert request - Concert ID: " + request.getConcert().getId() + 
+            ", New Name: " + request.getConcert().getName() + ", New Date: " + request.getConcert().getDate());
         try {
 //            concertLock.acquireLock();
             try {
@@ -176,6 +180,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
 
     @Override
     public void cancelConcert(ConcertService.CancelConcertRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
+        System.out.println("[Command] Received cancelConcert request - Concert ID: " + request.getConcertId());
         try {
 //            concertLock.acquireLock();
             try {
@@ -202,6 +207,9 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
 
     @Override
     public void addTicketStock(ConcertService.AddTicketStockRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
+        System.out.println("[Command] Received addTicketStock request - Concert ID: " + request.getConcertId() + 
+            ", Tier: " + request.getTier() + ", Count: " + request.getCount() + 
+            ", After Party: " + request.getAfterParty());
         try {
 //            concertLock.acquireLock();
             try {
@@ -253,6 +261,8 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
 
     @Override
     public void updateTicketPrice(ConcertService.UpdateTicketPriceRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
+        System.out.println("[Command] Received updateTicketPrice request - Concert ID: " + request.getConcertId() + 
+            ", Tier: " + request.getTier() + ", Price: " + request.getPrice());
         try {
 //            concertLock.acquireLock();
             try {
@@ -296,6 +306,9 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
 
     @Override
     public void reserveTickets(ConcertService.ReserveTicketsRequest request, StreamObserver<ConcertService.ReservationResponse> responseObserver) {
+        System.out.println("[Command] Received reserveTickets request - Concert ID: " + request.getConcertId() + 
+            ", Tier: " + request.getTier() + ", Count: " + request.getCount() + 
+            ", After Party: " + request.getAfterParty() + ", Customer ID: " + request.getCustomerId());
         try {
 //            reservationLock.acquireLock();
             try {
@@ -372,6 +385,9 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
 
     @Override
     public void bulkReserve(ConcertService.BulkReserveRequest request, StreamObserver<ConcertService.ReservationResponse> responseObserver) {
+        System.out.println("[Command] Received bulkReserve request - Concert ID: " + request.getConcertId() + 
+            ", Tier: " + request.getTier() + ", Count: " + request.getCount() + 
+            ", After Party: " + request.getAfterParty() + ", Group ID: " + request.getGroupId());
         try {
 //            reservationLock.acquireLock();
             try {
