@@ -7,6 +7,7 @@ import org.apache.zookeeper.Watcher;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -29,14 +30,14 @@ public class DistributedLock implements Watcher {
         zooKeeperUrl = url;
     }
 
-    public DistributedLock(String lockName) throws IOException, KeeperException, InterruptedException {
+    public DistributedLock(String lockName, byte[] initData) throws IOException, KeeperException, InterruptedException {
         this.lockPath = "/" + lockName;
         client = new ZooKeeperClient(zooKeeperUrl, 5000, this);
         startFlag.await();
         if (client.CheckExists(lockPath) == false) {
             createRootNode();
         }
-	createChildNode();
+	    createChildNode(initData);
     }
 
     private void createRootNode() throws InterruptedException, UnsupportedEncodingException, KeeperException {
@@ -44,10 +45,13 @@ public class DistributedLock implements Watcher {
         System.out.println("Root node created at " + lockPath);
     }
 
-    private void createChildNode() throws InterruptedException, UnsupportedEncodingException, KeeperException {
-        childPath = client.createNode(lockPath + lockProcessPath, false, CreateMode.EPHEMERAL_SEQUENTIAL);
+    private void createChildNode(byte[] data)
+            throws InterruptedException, UnsupportedEncodingException, KeeperException {
+        childPath = client.createNode(lockPath + lockProcessPath, false, CreateMode.EPHEMERAL_SEQUENTIAL, data);
         System.out.println("Child node created at " + childPath);
     }
+
+
     public boolean tryAcquireLock() throws KeeperException, InterruptedException, UnsupportedEncodingException {
         String smallestNode = this.findSmallestNodePath();
         if (smallestNode.equals(this.childPath)) {
@@ -103,8 +107,7 @@ public class DistributedLock implements Watcher {
         isAcquired = false;
     }
 
-    private String findSmallestNodePath() throws
-            KeeperException, InterruptedException {
+    private String findSmallestNodePath() throws KeeperException, InterruptedException {
         List<String> childrenNodePaths = null;
         childrenNodePaths = client.getChildrenNodePaths(lockPath);
         Collections.sort(childrenNodePaths);
@@ -113,6 +116,14 @@ public class DistributedLock implements Watcher {
         return smallestPath;
     }
 
+    public void setLockNodeData(byte[] data) throws KeeperException, InterruptedException {
+        if (childPath != null) {
+            client.setData(childPath, data);
+            System.out.println("Set data on lock node: " + childPath);
+        } else {
+            throw new IllegalStateException("Child node path is null, cannot set data");
+        }
+    }
     @Override
     public void process(WatchedEvent event) {
         Event.KeeperState state = event.getState();

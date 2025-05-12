@@ -11,9 +11,13 @@ import ds.tutorials.synchronization.DistributedLock;
 import ds.tutorials.synchronization.DistributedTxParticipant;
 import javafx.util.Pair;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.zookeeper.KeeperException;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.io.*;
 import java.nio.file.*;
 
@@ -126,14 +130,14 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
             }
             String IPAddress = serverData[0];
             int port = Integer.parseInt(serverData[1]);
-            
+
             try {
                 channel = ManagedChannelBuilder.forAddress(IPAddress, port)
                         .usePlaintext()
                         .build();
                 clientStub = ConcertCommandServiceGrpc.newBlockingStub(channel);
 
-                // Create appropriate request based on operation type
+                // Create request based on operation type
                 if (operationId.startsWith("add_concert_")) {
                     ConcertService.Concert concert = (ConcertService.Concert) data;
                     ConcertService.AddConcertRequest request = ConcertService.AddConcertRequest.newBuilder()
@@ -238,33 +242,64 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
 
     private <T> T callPrimaryServer(Object request, Class<T> responseType) {
         System.out.println("Calling Primary server");
-        String[] currentLeaderData = concertServer.getCurrentLeaderData();
-        String IPAddress = currentLeaderData[0];
-        int port = Integer.parseInt(currentLeaderData[1]);
 
         try {
-            channel = ManagedChannelBuilder.forAddress(IPAddress, port)
-                    .usePlaintext()
-                    .build();
-            clientStub = ConcertCommandServiceGrpc.newBlockingStub(channel);
+            String[] currentLeaderData = concertServer.getCurrentLeaderData();
 
-            if (request instanceof ConcertService.AddConcertRequest) {
-                return (T) clientStub.addConcert((ConcertService.AddConcertRequest) request);
-            } else if (request instanceof ConcertService.UpdateConcertRequest) {
-                return (T) clientStub.updateConcert((ConcertService.UpdateConcertRequest) request);
-            } else if (request instanceof ConcertService.CancelConcertRequest) {
-                return (T) clientStub.cancelConcert((ConcertService.CancelConcertRequest) request);
-            } else if (request instanceof ConcertService.AddTicketStockRequest) {
-                return (T) clientStub.addTicketStock((ConcertService.AddTicketStockRequest) request);
-            } else if (request instanceof ConcertService.UpdateTicketPriceRequest) {
-                return (T) clientStub.updateTicketPrice((ConcertService.UpdateTicketPriceRequest) request);
-            } else if (request instanceof ConcertService.ReserveTicketsRequest) {
-                return (T) clientStub.reserveTickets((ConcertService.ReserveTicketsRequest) request);
-            } else if (request instanceof ConcertService.BulkReserveRequest) {
-                return (T) clientStub.bulkReserve((ConcertService.BulkReserveRequest) request);
+            // Check if leader data exists
+            if (currentLeaderData == null || currentLeaderData.length == 0) {
+                System.err.println("No leader data available");
+                return getDefaultResponse(responseType);
             }
+
+            System.out.println("Encoded leader data: " + currentLeaderData[0]);
+
+            String encoded = currentLeaderData[0];
+            try {
+                byte[] decodedBytes = Base64.getDecoder().decode(encoded);
+                String decoded = new String(decodedBytes, StandardCharsets.UTF_8);
+
+                System.out.println("Decoded leader data: " + decoded);
+
+                JSONObject json = new JSONObject(decoded);
+                String IPAddress = json.getString("ip");
+                int port = json.getInt("port");  // Use getInt() instead of getString()
+
+                System.out.println("Connecting to leader at " + IPAddress + ":" + port);
+
+                channel = ManagedChannelBuilder.forAddress(IPAddress, port)
+                        .usePlaintext()
+                        .build();
+                clientStub = ConcertCommandServiceGrpc.newBlockingStub(channel);
+
+                if (request instanceof ConcertService.AddConcertRequest) {
+                    return (T) clientStub.addConcert((ConcertService.AddConcertRequest) request);
+                } else if (request instanceof ConcertService.UpdateConcertRequest) {
+                    return (T) clientStub.updateConcert((ConcertService.UpdateConcertRequest) request);
+                } else if (request instanceof ConcertService.CancelConcertRequest) {
+                    return (T) clientStub.cancelConcert((ConcertService.CancelConcertRequest) request);
+                } else if (request instanceof ConcertService.AddTicketStockRequest) {
+                    return (T) clientStub.addTicketStock((ConcertService.AddTicketStockRequest) request);
+                } else if (request instanceof ConcertService.UpdateTicketPriceRequest) {
+                    return (T) clientStub.updateTicketPrice((ConcertService.UpdateTicketPriceRequest) request);
+                } else if (request instanceof ConcertService.ReserveTicketsRequest) {
+                    return (T) clientStub.reserveTickets((ConcertService.ReserveTicketsRequest) request);
+                } else if (request instanceof ConcertService.BulkReserveRequest) {
+                    return (T) clientStub.bulkReserve((ConcertService.BulkReserveRequest) request);
+                }
+            } catch (IllegalArgumentException e) {
+                System.err.println("Error decoding Base64 data: " + e.getMessage());
+                return getDefaultResponse(responseType);
+            } catch (JSONException e) {
+                System.err.println("Error parsing JSON: " + e.getMessage() + " from data: " + encoded);
+                return getDefaultResponse(responseType);
+            }
+        } catch (ArrayIndexOutOfBoundsException e) {
+            System.err.println("Leader data format is incorrect: " + e.getMessage());
+            return getDefaultResponse(responseType);
         } catch (Exception e) {
             System.err.println("Error communicating with primary server: " + e.getMessage());
+            e.printStackTrace();
         } finally {
             if (channel != null) {
                 channel.shutdown();
@@ -272,6 +307,11 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
         }
 
         // Return a default response if communication fails
+        return getDefaultResponse(responseType);
+    }
+
+    // Helper method to get default response
+    private <T> T getDefaultResponse(Class<T> responseType) {
         if (responseType == ConcertService.ConcertResponse.class) {
             return (T) ConcertService.ConcertResponse.newBuilder()
                     .setSuccess(false)
@@ -287,9 +327,9 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
 
     @Override
     public void addConcert(ConcertService.AddConcertRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
-        System.out.println("[Command] Received addConcert request - Concert: " + request.getConcert().getName() + 
+        System.out.println("[Command] Received addConcert request - Concert: " + request.getConcert().getName() +
             " (ID: " + request.getConcert().getId() + ", Date: " + request.getConcert().getDate() + ")");
-        
+
         if (concertServer.isLeader()) {
             // Act as primary
             try {
@@ -299,6 +339,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
                 updateSecondaryServers(operationId, request.getConcert());
                 ((DistributedTxCoordinator)concertServer.getTransaction()).perform();
                 transactionStatus = true;  // Set to true after successful transaction
+
             } catch (Exception e) {
                 System.out.println("Error while adding concert: " + e.getMessage());
                 e.printStackTrace();
@@ -339,8 +380,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
                 ConcertService.Concert concert = (ConcertService.Concert) data;
                 concerts.put(concert.getId(), concert.toBuilder());
             }
-            // Add other operation types here
-            
+
             tempDataHolder = null;
             saveData();
         }
@@ -357,8 +397,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
         System.out.println("[Command] Received updateConcert request - Concert ID: " + request.getConcert().getId() + 
             ", New Name: " + request.getConcert().getName() + ", New Date: " + request.getConcert().getDate());
         try {
-//            concertLock.acquireLock();
-            try {
+
                 ConcertService.Concert concert = request.getConcert();
                 concerts.put(concert.getId(), concert.toBuilder());
                 ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
@@ -368,9 +407,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
                         .build();
                 responseObserver.onNext(response);
                 responseObserver.onCompleted();
-            } finally {
-//                concertLock.releaseLock();
-            }
+
         } catch (Exception e) {
             ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
                     .setSuccess(false)
@@ -385,8 +422,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
     public void cancelConcert(ConcertService.CancelConcertRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
         System.out.println("[Command] Received cancelConcert request - Concert ID: " + request.getConcertId());
         try {
-//            concertLock.acquireLock();
-            try {
+
                 String concertId = request.getConcertId();
                 concerts.remove(concertId);
                 ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
@@ -395,9 +431,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
                         .build();
                 responseObserver.onNext(response);
                 responseObserver.onCompleted();
-            } finally {
-//                concertLock.releaseLock();
-            }
+
         } catch (Exception e) {
             ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
                     .setSuccess(false)
@@ -414,8 +448,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
             ", Tier: " + request.getTier() + ", Count: " + request.getCount() + 
             ", After Party: " + request.getAfterParty());
         try {
-//            concertLock.acquireLock();
-            try {
+
                 String concertId = request.getConcertId();
                 ConcertService.Concert.Builder concert = concerts.get(concertId);
                 if (concert == null) {
@@ -449,9 +482,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
                         .build();
                 responseObserver.onNext(response);
                 responseObserver.onCompleted();
-            } finally {
-//                concertLock.releaseLock();
-            }
+
         } catch (Exception e) {
             ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
                     .setSuccess(false)
@@ -467,8 +498,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
         System.out.println("[Command] Received updateTicketPrice request - Concert ID: " + request.getConcertId() + 
             ", Tier: " + request.getTier() + ", Price: " + request.getPrice());
         try {
-//            concertLock.acquireLock();
-            try {
+
                 String concertId = request.getConcertId();
                 ConcertService.Concert.Builder concert = concerts.get(concertId);
                 if (concert == null) {
@@ -494,9 +524,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
                         .build();
                 responseObserver.onNext(response);
                 responseObserver.onCompleted();
-            } finally {
-//                concertLock.releaseLock();
-            }
+
         } catch (Exception e) {
             ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
                     .setSuccess(false)
@@ -509,45 +537,103 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
 
     @Override
     public void reserveTickets(ConcertService.ReserveTicketsRequest request, StreamObserver<ConcertService.ReservationResponse> responseObserver) {
-        System.out.println("[Command] Received reserveTickets request - Concert ID: " + request.getConcertId() + 
-            ", Tier: " + request.getTier() + ", Count: " + request.getCount() + 
-            ", After Party: " + request.getAfterParty() + ", Customer ID: " + request.getCustomerId());
-        
-        if (concertServer.isLeader()) {
-            // Act as primary
-            try {
+        System.out.println("[Command] Received reserveTickets request - Concert ID: " + request.getConcertId() +
+                ", Tier: " + request.getTier() + ", Count: " + request.getCount() +
+                ", After Party: " + request.getAfterParty() + ", Customer ID: " + request.getCustomerId());
+
+        boolean transactionStatus = false;
+        String reservationId = UUID.randomUUID().toString();
+
+        try {
+            if (concertServer.isLeader()) {
+                // PRIMARY NODE logic
                 System.out.println("Reserving tickets as Primary");
-                String operationId = "reserve_tickets_" + UUID.randomUUID().toString();
-                startDistributedTx(operationId, request);
-                updateSecondaryServers(operationId, request);
-                ((DistributedTxCoordinator)concertServer.getTransaction()).perform();
-            } catch (Exception e) {
-                System.out.println("Error while reserving tickets: " + e.getMessage());
-                e.printStackTrace();
-            }
-        } else {
-            // Act as secondary
-            if (request.getIsSentByPrimary()) {
-                System.out.println("Reserving tickets on secondary, on Primary's command");
-                String operationId = "reserve_tickets_" + UUID.randomUUID().toString();
-                startDistributedTx(operationId, request);
-                ((DistributedTxParticipant)concertServer.getTransaction()).voteCommit();
+                String operationId = "reserve_tickets_" + UUID.randomUUID();
+                startDistributedTx(operationId, request);  // stores the request internally
+
+                updateSecondaryServers(operationId, request);  // tell secondaries to prepare
+
+                // Perform the reservation (locally on primary)
+                transactionStatus = performReservation(request);
+
+                // Trigger commit/abort to all nodes via 2PCf
+                ((DistributedTxCoordinator) concertServer.getTransaction()).perform();
+
             } else {
-                // Forward to primary
-                ConcertService.ReservationResponse response = callPrimary(request);
-                if (response.getSuccess()) {
-                    transactionStatus = true;
+                if (request.getIsSentByPrimary()) {
+                    // SECONDARY NODE logic (executing command from primary)
+                    System.out.println("Reserving tickets on secondary, on Primary's command");
+                    String operationId = "reserve_tickets_" + UUID.randomUUID();
+                    startDistributedTx(operationId, request);
+
+                    transactionStatus = performReservation(request);
+                    ((DistributedTxParticipant) concertServer.getTransaction()).voteCommit();
+
+                } else {
+                    // FORWARD to primary
+                    ConcertService.ReservationResponse response = callPrimary(request);
+                    responseObserver.onNext(response);
+                    responseObserver.onCompleted();
+                    return;
                 }
             }
+        } catch (Exception e) {
+            System.err.println("Error during reservation: " + e.getMessage());
+            e.printStackTrace();
         }
 
+        // Build response for client (leader or secondary)
         ConcertService.ReservationResponse response = ConcertService.ReservationResponse.newBuilder()
                 .setSuccess(transactionStatus)
                 .setMessage(transactionStatus ? "Tickets reserved successfully." : "Failed to reserve tickets.")
-                .setReservationId(UUID.randomUUID().toString())
+                .setReservationId(reservationId)
                 .build();
+
         responseObserver.onNext(response);
         responseObserver.onCompleted();
+    }
+
+    private boolean performReservation(ConcertService.ReserveTicketsRequest request) {
+        String concertId = request.getConcertId();
+        ConcertService.Concert.Builder concert = concerts.get(concertId);
+
+        if (concert == null) {
+            System.err.println("Concert not found.");
+            return false;
+        }
+
+        synchronized (concert) {
+            int availableSeats = concert.getSeatTiersMap().getOrDefault(request.getTier(), 0);
+            int availableAfterParty = concert.getAfterPartyTickets();
+
+            if (request.getCount() > availableSeats) {
+                System.err.println("Not enough seats.");
+                return false;
+            }
+
+            if (request.getAfterParty() && request.getCount() > availableAfterParty) {
+                System.err.println("Not enough after-party tickets.");
+                return false;
+            }
+
+            // Deduct seats
+            Map<String, Integer> updatedTiers = new HashMap<>(concert.getSeatTiersMap());
+            updatedTiers.put(request.getTier(), availableSeats - request.getCount());
+            concert.putAllSeatTiers(updatedTiers);
+
+            // Deduct after-party
+            if (request.getAfterParty()) {
+                concert.setAfterPartyTickets(availableAfterParty - request.getCount());
+            }
+
+            // Update concert map
+            getConcerts().put(concertId, concert);
+            concerts.put(concertId, concert);
+
+            // Save to disk
+            saveData();
+            return true;
+        }
     }
 
     @Override
@@ -556,8 +642,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
             ", Tier: " + request.getTier() + ", Count: " + request.getCount() + 
             ", After Party: " + request.getAfterParty() + ", Group ID: " + request.getGroupId());
         try {
-//            reservationLock.acquireLock();
-            try {
+
                 String concertId = request.getConcertId();
                 ConcertService.Concert.Builder concert = concerts.get(concertId);
                 if (concert == null) {
@@ -622,9 +707,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
                     responseObserver.onNext(response);
                     responseObserver.onCompleted();
                 }
-            } finally {
-//                reservationLock.releaseLock();
-            }
+
         } catch (Exception e) {
             ConcertService.ReservationResponse response = ConcertService.ReservationResponse.newBuilder()
                     .setSuccess(false)

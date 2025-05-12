@@ -44,18 +44,23 @@ public class NameServiceClient {
         private int port;
         private String protocol;
         ServiceDetails populate(String serverResponse) {
+            if (serverResponse == null || serverResponse.isEmpty()) {
+                return null;
+            }
             JSONObject serverResponseJSONObject = new JSONObject(serverResponse);
             if (serverResponseJSONObject.has("kvs")) {
+
                 JSONArray values = serverResponseJSONObject.getJSONArray("kvs");
-                JSONObject firstValue = (JSONObject)
-                        values.get(0);
-                String encodedValue = (String)
-                        firstValue.get("value");
-                byte[] serverDetailsBytes = Base64.getDecoder().decode(encodedValue.getBytes(StandardCharsets.UTF_8));
-                JSONObject serverDetailsJson = new JSONObject(new String(serverDetailsBytes));
-                IPAddress = serverDetailsJson.get("ip").toString();
-                port = Integer.parseInt(serverDetailsJson.get("port").toString());
-                protocol = serverDetailsJson.get("protocol").toString();
+                if (values.isEmpty()) return null;
+
+                JSONObject firstValue = values.getJSONObject(0);
+                String encodedValue = firstValue.getString("value");
+
+                byte[] serverDetailsBytes = Base64.getDecoder().decode(encodedValue);
+                JSONObject serverDetailsJson = new JSONObject(new String(serverDetailsBytes, StandardCharsets.UTF_8));
+                IPAddress = serverDetailsJson.getString("ip");
+                port = Integer.parseInt(serverDetailsJson.getString("port"));
+                protocol = serverDetailsJson.getString("protocol");
                 return this;
             } else {
                 return null;

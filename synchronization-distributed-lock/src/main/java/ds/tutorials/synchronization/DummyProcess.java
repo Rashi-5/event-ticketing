@@ -14,7 +14,9 @@ public class DummyProcess {
     public static void main(String[] args) {
         DistributedLock.setZooKeeperURL(ZOOKEEPER_URL);
         try {
-            DistributedLock lock = new DistributedLock("ResourceLock");
+            byte[] nodeData = "dummy-node".getBytes("UTF-8");
+            DistributedLock lock = new DistributedLock("ResourceLock", nodeData);
+
             lock.acquireLock();
             System.out.println("I Got the lock at " + getCurrentTimeStamp());
             accessSharedResource();

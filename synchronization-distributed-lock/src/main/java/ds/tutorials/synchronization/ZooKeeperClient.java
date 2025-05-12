@@ -67,4 +67,8 @@ public class ZooKeeperClient {
             KeeperException, InterruptedException {
         zooKeeper.setData(path, data, -1);
     }
+
+    public void setData(String path, byte[] data) throws KeeperException, InterruptedException {
+        zooKeeper.setData(path, data, -1);
+    }
 }

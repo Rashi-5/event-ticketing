@@ -45,7 +45,16 @@ public class DistributedTxParticipant extends DistributedTx implements Watcher {
         try {
             transactionRoot = "/" + transactionId;
             currentTransaction = transactionRoot + PARTICIPANT_PREFIX + participantId;
+
+            // Ensure transaction root exists
+            if (!client.CheckExists(transactionRoot)) {
+                client.createNode(transactionRoot, false, CreateMode.PERSISTENT, "".getBytes(StandardCharsets.UTF_8));
+            }
+
+            // create the ephemeral node for the participant
             client.createNode(currentTransaction, true, CreateMode.EPHEMERAL, "".getBytes(StandardCharsets.UTF_8));
+
+            // Add watch on the transaction root to observe changes
             client.addWatch(transactionRoot);
         } catch (Exception e) {
             e.printStackTrace();
