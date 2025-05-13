@@ -7,11 +7,13 @@
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
         <module name="Naming-DS" />
-        <module name="zookeeper" />
         <module name="synchronization-distributed-lock" />
         <module name="communication-server" />
         <module name="communication-client" />
       </profile>
     </annotationProcessing>
+    <bytecodeTargetLevel>
+      <module name="zookeeper" target="1.8" />
+    </bytecodeTargetLevel>
   </component>
 </project>

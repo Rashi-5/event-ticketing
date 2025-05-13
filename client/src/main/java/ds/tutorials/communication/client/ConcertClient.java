@@ -9,6 +9,9 @@ import distributed.NameServiceClient;
 import distributed.NameServiceClient.ServiceDetails;
 
 import java.io.IOException;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
@@ -159,8 +162,23 @@ public class ConcertClient {
                                 int tickets = Integer.parseInt(scanner.nextLine());
                                 System.out.print("How many After party Tickets: ");
                                 int afterPartyTickets = Integer.parseInt(scanner.nextLine());
+                                if (afterPartyTickets > tickets) {
+                                    System.out.println("Error: After-party tickets cannot exceed total tickets.");
+                                    break;
+                                }
                                 System.out.print("Date (YYYY-MM-DD): ");
                                 String date = scanner.nextLine();
+                                LocalDate concertDate;
+                                try {
+                                    concertDate = LocalDate.parse(date, DateTimeFormatter.ISO_LOCAL_DATE);
+                                    if (concertDate.isBefore(LocalDate.now())) {
+                                        System.out.println("Error: The concert date cannot be in the past.");
+                                        break;
+                                    }
+                                } catch (DateTimeParseException e) {
+                                    System.out.println("Error: Invalid date format. Please use YYYY-MM-DD.");
+                                    break;
+                                }
                                 String id = UUID.randomUUID().toString();
                                 Concert concert = Concert.newBuilder()
                                     .setId(id)
@@ -169,10 +187,10 @@ public class ConcertClient {
                                     .setMaxTicketCount(tickets)
                                     .setAfterPartyTickets(afterPartyTickets)
                                     .build();
-                            AddConcertRequest req = AddConcertRequest.newBuilder().setConcert(concert).build();
-                            ConcertResponse resp = client.commandStub.addConcert(req);
-                            System.out.println(resp.getMessage());
-                        } else {
+                                AddConcertRequest req = AddConcertRequest.newBuilder().setConcert(concert).build();
+                                ConcertResponse resp = client.commandStub.addConcert(req);
+                                System.out.println(resp.getMessage());
+                            } else {
                                 System.out.println("Invalid option for your role.");
                             }
                             break;
@@ -182,11 +200,32 @@ public class ConcertClient {
                                 String idToUpdate = scanner.nextLine();
                                 System.out.print("New Name: ");
                                 String newName = scanner.nextLine();
+                                System.out.print("How many Tickets (max): ");
+                                int tickets = Integer.parseInt(scanner.nextLine());
+                                System.out.print("How many After party Tickets: ");
+                                int afterPartyTickets = Integer.parseInt(scanner.nextLine());
+                                if (afterPartyTickets > tickets) {
+                                    System.out.println("Error: After-party tickets cannot exceed total tickets.");
+                                    break;
+                                }
                                 System.out.print("New Date (YYYY-MM-DD): ");
                                 String newDate = scanner.nextLine();
+                                LocalDate concertDate;
+                                try {
+                                    concertDate = LocalDate.parse(newDate, DateTimeFormatter.ISO_LOCAL_DATE);
+                                    if (concertDate.isBefore(LocalDate.now())) {
+                                        System.out.println("Error: The concert date cannot be in the past.");
+                                        break;
+                                    }
+                                } catch (DateTimeParseException e) {
+                                    System.out.println("Error: Invalid date format. Please use YYYY-MM-DD.");
+                                    break;
+                                }
                                 Concert updatedConcert = Concert.newBuilder()
                                         .setId(idToUpdate)
                                         .setName(newName)
+                                        .setMaxTicketCount(tickets)
+                                        .setAfterPartyTickets(afterPartyTickets)
                                         .setDate(newDate)
                                         .build();
                                 UpdateConcertRequest updateReq = UpdateConcertRequest.newBuilder().setConcert(updatedConcert).build();

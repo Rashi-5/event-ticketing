@@ -394,8 +394,12 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
                 // Commit transaction
                 ((DistributedTxCoordinator) concertServer.getTransaction()).perform();
 
-                // Update in-memory store after commit
-                concerts.put(request.getConcert().getId(), request.getConcert().toBuilder());
+                ConcertService.Concert.Builder oldConcert = concerts.get(request.getConcert().getId());
+                ConcertService.Concert.Builder updated = oldConcert != null
+                        ? mergeConcertData(oldConcert.build(), request.getConcert())
+                        : request.getConcert().toBuilder();
+
+                concerts.put(request.getConcert().getId(), updated);
 
                 response = ConcertService.ConcertResponse.newBuilder()
                         .setSuccess(true)
@@ -411,7 +415,12 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
                     ((DistributedTxParticipant) concertServer.getTransaction()).voteCommit();
 
                     // Update local store after successful commit
-                    concerts.put(request.getConcert().getId(), request.getConcert().toBuilder());
+                    ConcertService.Concert.Builder oldConcert = concerts.get(request.getConcert().getId());
+                    ConcertService.Concert.Builder updated = oldConcert != null
+                            ? mergeConcertData(oldConcert.build(), request.getConcert())
+                            : request.getConcert().toBuilder();
+
+                    concerts.put(request.getConcert().getId(), updated);
 
                     response = ConcertService.ConcertResponse.newBuilder()
                             .setSuccess(true)
@@ -435,6 +444,29 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
         responseObserver.onNext(response);
         responseObserver.onCompleted();
     }
+
+    private ConcertService.Concert.Builder mergeConcertData(ConcertService.Concert oldConcert, ConcertService.Concert newConcert) {
+        ConcertService.Concert.Builder merged = newConcert.toBuilder();
+
+        int totalTierTickets = oldConcert.getSeatTiersMap().values().stream().mapToInt(Integer::intValue).sum();
+        int totalAfterParty = oldConcert.getAfterPartyTickets();
+        int totalAllocated = totalTierTickets + totalAfterParty;
+
+        if (newConcert.getMaxTicketCount() >= totalAllocated) {
+            // Preserve existing seat tiers and prices
+            merged.putAllSeatTiers(oldConcert.getSeatTiersMap());
+            merged.putAllPrices(oldConcert.getPricesMap());
+            merged.setAfterPartyTickets(oldConcert.getAfterPartyTickets());
+        } else {
+            // Reset because new maxTicketCount is less than allocated tickets
+            System.out.println("Resetting seat tiers and prices due to lower max ticket count.");
+            merged.clearSeatTiers();
+            merged.clearPrices();
+            merged.setAfterPartyTickets(0);
+        }
+        return merged;
+    }
+
 
     @Override
     public void cancelConcert(ConcertService.CancelConcertRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
@@ -509,15 +541,21 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
                 updateSecondaryServers(operationId, request);
                 ((DistributedTxCoordinator) concertServer.getTransaction()).perform();
 
-                applyTicketStockUpdate(request); // This modifies the local concert state
+                boolean updated = applyTicketStockUpdate(request);
 
-                ConcertService.Concert.Builder concert = concerts.get(concertId);
-
-                response = ConcertService.ConcertResponse.newBuilder()
-                        .setSuccess(true)
-                        .setMessage("Ticket stock updated.")
-                        .setConcert(concert.build())
-                        .build();
+                if (!updated) {
+                    response = ConcertService.ConcertResponse.newBuilder()
+                            .setSuccess(false)
+                            .setMessage("Ticket stock update failed (exceeded max ticket count).")
+                            .build();
+                } else {
+                    ConcertService.Concert.Builder concert = concerts.get(concertId);
+                    response = ConcertService.ConcertResponse.newBuilder()
+                            .setSuccess(true)
+                            .setMessage("Ticket stock updated.")
+                            .setConcert(concert.build())
+                            .build();
+                }
 
             } else {
                 if (request.getIsSentByPrimary()) {
@@ -527,15 +565,22 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
                     startDistributedTx(operationId, request);
                     ((DistributedTxParticipant) concertServer.getTransaction()).voteCommit();
 
-                    applyTicketStockUpdate(request); // Modify local copy
+                    boolean updated = applyTicketStockUpdate(request);
 
-                    ConcertService.Concert.Builder concert = concerts.get(concertId);
+                    if (!updated) {
+                        response = ConcertService.ConcertResponse.newBuilder()
+                                .setSuccess(false)
+                                .setMessage("Ticket stock update failed on secondary (exceeded max ticket count).")
+                                .build();
+                    } else {
+                        ConcertService.Concert.Builder concert = concerts.get(concertId);
+                        response = ConcertService.ConcertResponse.newBuilder()
+                                .setSuccess(true)
+                                .setMessage("Ticket stock updated on secondary.")
+                                .setConcert(concert.build())
+                                .build();
+                    }
 
-                    response = ConcertService.ConcertResponse.newBuilder()
-                            .setSuccess(true)
-                            .setMessage("Ticket stock updated on secondary.")
-                            .setConcert(concert.build())
-                            .build();
                 } else {
                     System.out.println("Forwarding ticket stock update to primary.");
                     response = callPrimary(request);
@@ -554,30 +599,30 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
         responseObserver.onCompleted();
     }
 
-    private void applyTicketStockUpdate(ConcertService.AddTicketStockRequest request) {
+    private boolean applyTicketStockUpdate(ConcertService.AddTicketStockRequest request) {
         String concertId = request.getConcertId();
         ConcertService.Concert.Builder concert = concerts.get(concertId);
-        if (concert == null) return;
+        if (concert == null) return false;
 
-        // Calculate current total ticket count (seat tiers + after-party)
-        int currentSeatTotal = concert.getSeatTiersMap().values().stream().mapToInt(Integer::intValue).sum();
-        int currentAfterParty = concert.getAfterPartyTickets();
-        int currentTotal = currentSeatTotal + currentAfterParty;
-
-        // Get max allowed
         int maxAllowed = concert.getMaxTicketCount();
         int newTickets = request.getCount();
 
-        // Check if this update would exceed the max
-        if (currentTotal + newTickets > maxAllowed) {
-            System.err.println("Cannot add tickets: would exceed maxTicketCount (" + maxAllowed + ")");
-            return;
-        }
-
         if (request.getAfterParty()) {
-            concert.setAfterPartyTickets(currentAfterParty + newTickets);
+            int current = concert.getAfterPartyTickets();
+            if (current + newTickets > maxAllowed) {
+                System.out.println("Cannot add tickets: exceeds max ticket count.");
+                return false;
+            }
+            concert.setAfterPartyTickets(current + newTickets);
         } else {
             Map<String, Integer> seatTiers = new HashMap<>(concert.getSeatTiersMap());
+
+            int currentTotal = seatTiers.values().stream().mapToInt(Integer::intValue).sum();
+            if (currentTotal + newTickets > maxAllowed) {
+                System.out.println("Cannot add tickets: exceeds max ticket count.");
+                return false;
+            }
+
             seatTiers.put(request.getTier(), seatTiers.getOrDefault(request.getTier(), 0) + newTickets);
             concert.putAllSeatTiers(seatTiers);
 
@@ -589,6 +634,8 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
         }
 
         concerts.put(concertId, concert);
+        saveData();
+        return true;
     }
 
     @Override
@@ -650,6 +697,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
         responseObserver.onNext(response);
         responseObserver.onCompleted();
     }
+
     private void applyTicketPriceUpdate(ConcertService.UpdateTicketPriceRequest request) {
         String concertId = request.getConcertId();
         ConcertService.Concert.Builder concert = concerts.get(concertId);
@@ -966,7 +1014,6 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
         saveData();
         return true;
     }
-
 
     // Expose concerts map for query service
     public Map<String, ConcertService.Concert.Builder> getConcerts() {
