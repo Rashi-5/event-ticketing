@@ -220,6 +220,10 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
         return callPrimaryServer(request, ConcertService.ConcertResponse.class);
     }
 
+    private ConcertService.ConcertResponse callPrimary(ConcertService.ApplyDiscountRequest request) {
+        return callPrimaryServer(request, ConcertService.ConcertResponse.class);
+    }
+
     private ConcertService.ConcertResponse callPrimary(ConcertService.CancelConcertRequest request) {
         return callPrimaryServer(request, ConcertService.ConcertResponse.class);
     }
@@ -328,7 +332,7 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
     @Override
     public void addConcert(ConcertService.AddConcertRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
         System.out.println("[Command] Received addConcert request - Concert: " + request.getConcert().getName() +
-            " (ID: " + request.getConcert().getId() + ", Date: " + request.getConcert().getDate() + ")");
+                " (ID: " + request.getConcert().getId() + ", Date: " + request.getConcert().getDate() + ")");
 
         if (concertServer.isLeader()) {
             // Act as primary
@@ -370,169 +374,294 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
     }
 
     @Override
-    public void onGlobalCommit() {
-        if (tempDataHolder != null) {
-            String operationId = tempDataHolder.getKey();
-            Object data = tempDataHolder.getValue();
-            
-            // Handle the committed data based on operation type
-            if (operationId.startsWith("add_concert_")) {
-                ConcertService.Concert concert = (ConcertService.Concert) data;
-                concerts.put(concert.getId(), concert.toBuilder());
-            }
-
-            tempDataHolder = null;
-            saveData();
-        }
-    }
-
-    @Override
-    public void onGlobalAbort() {
-        tempDataHolder = null;
-        System.out.println("Transaction Aborted by the Coordinator");
-    }
-
-    @Override
     public void updateConcert(ConcertService.UpdateConcertRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
-        System.out.println("[Command] Received updateConcert request - Concert ID: " + request.getConcert().getId() + 
-            ", New Name: " + request.getConcert().getName() + ", New Date: " + request.getConcert().getDate());
-        try {
+        System.out.println("[Command] Received updateConcert request - Concert ID: " + request.getConcert().getId() +
+                ", New Name: " + request.getConcert().getName() + ", New Date: " + request.getConcert().getDate());
 
-                ConcertService.Concert concert = request.getConcert();
-                concerts.put(concert.getId(), concert.toBuilder());
-                ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
+        ConcertService.ConcertResponse response;
+
+        try {
+            if (concertServer.isLeader()) {
+                System.out.println("Updating concert as Primary");
+                String operationId = "update_concert_" + request.getConcert().getId();
+
+                // Begin distributed transaction
+                startDistributedTx(operationId, request.getConcert());
+
+                // Inform secondaries
+                updateSecondaryServers(operationId, request.getConcert());
+
+                // Commit transaction
+                ((DistributedTxCoordinator) concertServer.getTransaction()).perform();
+
+                // Update in-memory store after commit
+                concerts.put(request.getConcert().getId(), request.getConcert().toBuilder());
+
+                response = ConcertService.ConcertResponse.newBuilder()
                         .setSuccess(true)
                         .setMessage("Concert updated successfully.")
-                        .setConcert(concert)
+                        .setConcert(request.getConcert())
                         .build();
-                responseObserver.onNext(response);
-                responseObserver.onCompleted();
+
+            } else {
+                if (request.getIsSentByPrimary()) {
+                    System.out.println("Updating concert on secondary, on Primary's command");
+                    String operationId = "update_concert_" + request.getConcert().getId();
+                    startDistributedTx(operationId, request.getConcert());
+                    ((DistributedTxParticipant) concertServer.getTransaction()).voteCommit();
+
+                    // Update local store after successful commit
+                    concerts.put(request.getConcert().getId(), request.getConcert().toBuilder());
+
+                    response = ConcertService.ConcertResponse.newBuilder()
+                            .setSuccess(true)
+                            .setMessage("Concert updated on secondary.")
+                            .setConcert(request.getConcert())
+                            .build();
+                } else {
+                    System.out.println("Not leader, forwarding update request to primary.");
+                    response = callPrimary(request);  // forward and reuse response
+                }
+            }
 
         } catch (Exception e) {
-            ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
+            e.printStackTrace();
+            response = ConcertService.ConcertResponse.newBuilder()
                     .setSuccess(false)
-                    .setMessage("Distributed lock error: " + e.getMessage())
+                    .setMessage("Error during update: " + e.getMessage())
                     .build();
-            responseObserver.onNext(response);
-            responseObserver.onCompleted();
         }
+
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
     }
 
     @Override
     public void cancelConcert(ConcertService.CancelConcertRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
         System.out.println("[Command] Received cancelConcert request - Concert ID: " + request.getConcertId());
-        try {
 
-                String concertId = request.getConcertId();
+        ConcertService.ConcertResponse response;
+
+        try {
+            String concertId = request.getConcertId();
+
+            if (concertServer.isLeader()) {
+                System.out.println("Cancelling concert as Primary");
+                String operationId = "cancel_concert_" + concertId;
+
+                startDistributedTx(operationId, concertId);
+                updateSecondaryServers(operationId, concertId);
+                ((DistributedTxCoordinator) concertServer.getTransaction()).perform();
+
                 concerts.remove(concertId);
-                ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
+
+                response = ConcertService.ConcertResponse.newBuilder()
                         .setSuccess(true)
                         .setMessage("Concert cancelled successfully.")
                         .build();
-                responseObserver.onNext(response);
-                responseObserver.onCompleted();
+
+            } else {
+                if (request.getIsSentByPrimary()) {
+                    System.out.println("Cancelling concert on secondary, on Primary's command");
+                    String operationId = "cancel_concert_" + concertId;
+
+                    startDistributedTx(operationId, concertId);
+                    ((DistributedTxParticipant) concertServer.getTransaction()).voteCommit();
+
+                    concerts.remove(concertId);
+
+                    response = ConcertService.ConcertResponse.newBuilder()
+                            .setSuccess(true)
+                            .setMessage("Concert cancelled on secondary.")
+                            .build();
+                } else {
+                    System.out.println("Not leader, forwarding cancel request to primary.");
+                    response = callPrimary(request);
+                }
+            }
 
         } catch (Exception e) {
-            ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
+            e.printStackTrace();
+            response = ConcertService.ConcertResponse.newBuilder()
                     .setSuccess(false)
-                    .setMessage("Distributed lock error: " + e.getMessage())
+                    .setMessage("Error during cancellation: " + e.getMessage())
                     .build();
-            responseObserver.onNext(response);
-            responseObserver.onCompleted();
         }
+
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
     }
 
     @Override
     public void addTicketStock(ConcertService.AddTicketStockRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
-        System.out.println("[Command] Received addTicketStock request - Concert ID: " + request.getConcertId() + 
-            ", Tier: " + request.getTier() + ", Count: " + request.getCount() + 
-            ", After Party: " + request.getAfterParty());
-        try {
+        System.out.println("[Command] Received addTicketStock request - Concert ID: " + request.getConcertId() +
+                ", Tier: " + request.getTier() + ", Count: " + request.getCount() + ", After Party: " + request.getAfterParty());
 
-                String concertId = request.getConcertId();
+        ConcertService.ConcertResponse response;
+        String concertId = request.getConcertId();
+
+        try {
+            if (concertServer.isLeader()) {
+                System.out.println("Updating ticket stock as Primary");
+
+                String operationId = "add_ticket_stock_" + concertId + "_" + request.getTier();
+                startDistributedTx(operationId, request);
+                updateSecondaryServers(operationId, request);
+                ((DistributedTxCoordinator) concertServer.getTransaction()).perform();
+
+                applyTicketStockUpdate(request); // This modifies the local concert state
+
                 ConcertService.Concert.Builder concert = concerts.get(concertId);
-                if (concert == null) {
-                    ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
-                            .setSuccess(false)
-                            .setMessage("Concert not found.")
-                            .build();
-                    responseObserver.onNext(response);
-                    responseObserver.onCompleted();
-                    return;
-                }
-                if (request.getAfterParty()) {
-                    int current = concert.getAfterPartyTickets();
-                    concert.setAfterPartyTickets(current + request.getCount());
-                } else {
-                    Map<String, Integer> seatTiers = new HashMap<>(concert.getSeatTiersMap());
-                    seatTiers.put(request.getTier(), seatTiers.getOrDefault(request.getTier(), 0) + request.getCount());
-                    concert.putAllSeatTiers(seatTiers);
-                    // Set price if provided and > 0
-                    if (request.getPrice() > 0) {
-                        Map<String, Double> prices = new HashMap<>(concert.getPricesMap());
-                        prices.put(request.getTier(), request.getPrice());
-                        concert.putAllPrices(prices);
-                    }
-                }
-                concerts.put(concertId, concert);
-                ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
+
+                response = ConcertService.ConcertResponse.newBuilder()
                         .setSuccess(true)
                         .setMessage("Ticket stock updated.")
                         .setConcert(concert.build())
                         .build();
-                responseObserver.onNext(response);
-                responseObserver.onCompleted();
+
+            } else {
+                if (request.getIsSentByPrimary()) {
+                    System.out.println("Secondary updating ticket stock on Primary's command");
+
+                    String operationId = "add_ticket_stock_" + concertId + "_" + request.getTier();
+                    startDistributedTx(operationId, request);
+                    ((DistributedTxParticipant) concertServer.getTransaction()).voteCommit();
+
+                    applyTicketStockUpdate(request); // Modify local copy
+
+                    ConcertService.Concert.Builder concert = concerts.get(concertId);
+
+                    response = ConcertService.ConcertResponse.newBuilder()
+                            .setSuccess(true)
+                            .setMessage("Ticket stock updated on secondary.")
+                            .setConcert(concert.build())
+                            .build();
+                } else {
+                    System.out.println("Forwarding ticket stock update to primary.");
+                    response = callPrimary(request);
+                }
+            }
 
         } catch (Exception e) {
-            ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
+            e.printStackTrace();
+            response = ConcertService.ConcertResponse.newBuilder()
                     .setSuccess(false)
-                    .setMessage("Distributed lock error: " + e.getMessage())
+                    .setMessage("Error updating ticket stock: " + e.getMessage())
                     .build();
-            responseObserver.onNext(response);
-            responseObserver.onCompleted();
         }
+
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
+    }
+
+    private void applyTicketStockUpdate(ConcertService.AddTicketStockRequest request) {
+        String concertId = request.getConcertId();
+        ConcertService.Concert.Builder concert = concerts.get(concertId);
+        if (concert == null) return;
+
+        // Calculate current total ticket count (seat tiers + after-party)
+        int currentSeatTotal = concert.getSeatTiersMap().values().stream().mapToInt(Integer::intValue).sum();
+        int currentAfterParty = concert.getAfterPartyTickets();
+        int currentTotal = currentSeatTotal + currentAfterParty;
+
+        // Get max allowed
+        int maxAllowed = concert.getMaxTicketCount();
+        int newTickets = request.getCount();
+
+        // Check if this update would exceed the max
+        if (currentTotal + newTickets > maxAllowed) {
+            System.err.println("Cannot add tickets: would exceed maxTicketCount (" + maxAllowed + ")");
+            return;
+        }
+
+        if (request.getAfterParty()) {
+            concert.setAfterPartyTickets(currentAfterParty + newTickets);
+        } else {
+            Map<String, Integer> seatTiers = new HashMap<>(concert.getSeatTiersMap());
+            seatTiers.put(request.getTier(), seatTiers.getOrDefault(request.getTier(), 0) + newTickets);
+            concert.putAllSeatTiers(seatTiers);
+
+            if (request.getPrice() > 0) {
+                Map<String, Double> prices = new HashMap<>(concert.getPricesMap());
+                prices.put(request.getTier(), request.getPrice());
+                concert.putAllPrices(prices);
+            }
+        }
+
+        concerts.put(concertId, concert);
     }
 
     @Override
     public void updateTicketPrice(ConcertService.UpdateTicketPriceRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
-        System.out.println("[Command] Received updateTicketPrice request - Concert ID: " + request.getConcertId() + 
-            ", Tier: " + request.getTier() + ", Price: " + request.getPrice());
+        System.out.println("[Command] Received updateTicketPrice request - Concert ID: " + request.getConcertId() +
+                ", Tier: " + request.getTier() + ", Price: " + request.getPrice());
+
+        ConcertService.ConcertResponse response;
+        String concertId = request.getConcertId();
+
         try {
+            if (concertServer.isLeader()) {
+                System.out.println("Updating ticket price as Primary");
 
-                String concertId = request.getConcertId();
+                String operationId = "update_ticket_price_" + concertId + "_" + request.getTier();
+                startDistributedTx(operationId, request);
+                updateSecondaryServers(operationId, request);
+                ((DistributedTxCoordinator) concertServer.getTransaction()).perform();
+
+                applyTicketPriceUpdate(request);
+
                 ConcertService.Concert.Builder concert = concerts.get(concertId);
-                if (concert == null) {
-                    ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
-                            .setSuccess(false)
-                            .setMessage("Concert not found.")
-                            .build();
-                    responseObserver.onNext(response);
-                    responseObserver.onCompleted();
-                    return;
-                }
-                Map<String, Double> prices = new HashMap<>(concert.getPricesMap());
-                prices.put(request.getTier(), request.getPrice());
-                concert.putAllPrices(prices);
-
-                concertServer.setConcertData(concertId, request.getTier(), request.getPrice());
-
-                concerts.put(concertId, concert);
-                ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
+                response = ConcertService.ConcertResponse.newBuilder()
                         .setSuccess(true)
                         .setMessage("Ticket price updated.")
                         .setConcert(concert.build())
                         .build();
-                responseObserver.onNext(response);
-                responseObserver.onCompleted();
+
+            } else {
+                if (request.getIsSentByPrimary()) {
+                    System.out.println("Secondary updating ticket price on Primary's command");
+
+                    String operationId = "update_ticket_price_" + concertId + "_" + request.getTier();
+                    startDistributedTx(operationId, request);
+                    ((DistributedTxParticipant) concertServer.getTransaction()).voteCommit();
+
+                    applyTicketPriceUpdate(request);
+
+                    ConcertService.Concert.Builder concert = concerts.get(concertId);
+                    response = ConcertService.ConcertResponse.newBuilder()
+                            .setSuccess(true)
+                            .setMessage("Ticket price updated on secondary.")
+                            .setConcert(concert.build())
+                            .build();
+                } else {
+                    System.out.println("Forwarding ticket price update to primary.");
+                    response = callPrimary(request);
+                }
+            }
 
         } catch (Exception e) {
-            ConcertService.ConcertResponse response = ConcertService.ConcertResponse.newBuilder()
+            e.printStackTrace();
+            response = ConcertService.ConcertResponse.newBuilder()
                     .setSuccess(false)
-                    .setMessage("Distributed lock error: " + e.getMessage())
+                    .setMessage("Error updating ticket price: " + e.getMessage())
                     .build();
-            responseObserver.onNext(response);
-            responseObserver.onCompleted();
         }
+
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
+    }
+    private void applyTicketPriceUpdate(ConcertService.UpdateTicketPriceRequest request) {
+        String concertId = request.getConcertId();
+        ConcertService.Concert.Builder concert = concerts.get(concertId);
+        if (concert == null) return;
+
+        Map<String, Double> prices = new HashMap<>(concert.getPricesMap());
+        prices.put(request.getTier(), request.getPrice());
+        concert.putAllPrices(prices);
+
+        concertServer.setConcertData(concertId, request.getTier(), request.getPrice());
+        concerts.put(concertId, concert);
+        saveData();
     }
 
     @Override
@@ -638,89 +767,232 @@ public class ConcertCommandServiceImpl extends ConcertCommandServiceGrpc.Concert
 
     @Override
     public void bulkReserve(ConcertService.BulkReserveRequest request, StreamObserver<ConcertService.ReservationResponse> responseObserver) {
-        System.out.println("[Command] Received bulkReserve request - Concert ID: " + request.getConcertId() + 
-            ", Tier: " + request.getTier() + ", Count: " + request.getCount() + 
-            ", After Party: " + request.getAfterParty() + ", Group ID: " + request.getGroupId());
-        try {
+        System.out.println("[Command] Received bulkReserve request - Concert ID: " + request.getConcertId() +
+                ", Tier: " + request.getTier() + ", Count: " + request.getCount() +
+                ", After Party: " + request.getAfterParty() + ", Group ID: " + request.getGroupId());
 
-                String concertId = request.getConcertId();
-                ConcertService.Concert.Builder concert = concerts.get(concertId);
-                if (concert == null) {
-                    ConcertService.ReservationResponse response = ConcertService.ReservationResponse.newBuilder()
-                            .setSuccess(false)
-                            .setMessage("Concert not found.")
-                            .build();
-                    responseObserver.onNext(response);
-                    responseObserver.onCompleted();
-                    return;
+        ConcertService.ReservationResponse response;
+
+        try {
+            String concertId = request.getConcertId();
+
+            if (concertServer.isLeader()) {
+                System.out.println("Processing bulkReserve as Primary");
+
+                String operationId = "bulk_reserve_" + concertId + "_" + request.getGroupId();
+                startDistributedTx(operationId, request);
+                updateSecondaryServers(operationId, request);
+                ((DistributedTxCoordinator) concertServer.getTransaction()).perform();
+
+                response = applyBulkReservation(request);
+
+            } else {
+                if (request.getIsSentByPrimary()) {
+                    System.out.println("Secondary processing bulkReserve on Primary's command");
+
+                    String operationId = "bulk_reserve_" + concertId + "_" + request.getGroupId();
+                    startDistributedTx(operationId, request);
+                    ((DistributedTxParticipant) concertServer.getTransaction()).voteCommit();
+
+                    response = applyBulkReservation(request);
+                } else {
+                    System.out.println("Forwarding bulkReserve request to primary.");
+                    response = callPrimary(request);
                 }
-                
-                synchronized (concert) {
-                    int availableSeats = concert.getSeatTiersMap().getOrDefault(request.getTier(), 0);
-                    int availableAfterParty = concert.getAfterPartyTickets();
-                    
-                    if (request.getCount() > availableSeats) {
-                        ConcertService.ReservationResponse response = ConcertService.ReservationResponse.newBuilder()
-                                .setSuccess(false)
-                                .setMessage("Not enough seats available.")
-                                .build();
-                        responseObserver.onNext(response);
-                        responseObserver.onCompleted();
-                        return;
-                    }
-                    
-                    if (request.getAfterParty() && request.getCount() > availableAfterParty) {
-                        ConcertService.ReservationResponse response = ConcertService.ReservationResponse.newBuilder()
-                                .setSuccess(false)
-                                .setMessage("Not enough after-party tickets available.")
-                                .build();
-                        responseObserver.onNext(response);
-                        responseObserver.onCompleted();
-                        return;
-                    }
-                    
-                    // Update seat tiers
-                    Map<String, Integer> seatTiers = new HashMap<>(concert.getSeatTiersMap());
-                    seatTiers.put(request.getTier(), availableSeats - request.getCount());
-                    concert.putAllSeatTiers(seatTiers);
-                    
-                    // Update after-party tickets if needed
-                    if (request.getAfterParty()) {
-                        concert.setAfterPartyTickets(availableAfterParty - request.getCount());
-                    }
-                    
-                    // Save the updated concert
-                    concerts.put(concertId, concert);
-                    
-                    // Create and store the reservation
-                    String reservationId = UUID.randomUUID().toString();
-                    ConcertService.ReservationResponse response = ConcertService.ReservationResponse.newBuilder()
-                            .setSuccess(true)
-                            .setMessage("Bulk reservation successful.")
-                            .setReservationId(reservationId)
-                            .build();
-                    reservations.put(reservationId, response);
-                    
-                    // Save the data to disk
-                    saveData();
-                    
-                    responseObserver.onNext(response);
-                    responseObserver.onCompleted();
-                }
+            }
 
         } catch (Exception e) {
-            ConcertService.ReservationResponse response = ConcertService.ReservationResponse.newBuilder()
+            e.printStackTrace();
+            response = ConcertService.ReservationResponse.newBuilder()
                     .setSuccess(false)
-                    .setMessage("Distributed lock error: " + e.getMessage())
+                    .setMessage("Error during bulk reservation: " + e.getMessage())
                     .build();
-            responseObserver.onNext(response);
-            responseObserver.onCompleted();
+        }
+
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
+    }
+    private ConcertService.ReservationResponse applyBulkReservation(ConcertService.BulkReserveRequest request) {
+        String concertId = request.getConcertId();
+        ConcertService.Concert.Builder concert = concerts.get(concertId);
+
+        if (concert == null) {
+            return ConcertService.ReservationResponse.newBuilder()
+                    .setSuccess(false)
+                    .setMessage("Concert not found.")
+                    .build();
+        }
+
+        synchronized (concert) {
+            int availableSeats = concert.getSeatTiersMap().getOrDefault(request.getTier(), 0);
+            int availableAfterParty = concert.getAfterPartyTickets();
+
+            if (request.getCount() > availableSeats) {
+                return ConcertService.ReservationResponse.newBuilder()
+                        .setSuccess(false)
+                        .setMessage("Not enough seats available.")
+                        .build();
+            }
+
+            if (request.getAfterParty() && request.getCount() > availableAfterParty) {
+                return ConcertService.ReservationResponse.newBuilder()
+                        .setSuccess(false)
+                        .setMessage("Not enough after-party tickets available.")
+                        .build();
+            }
+
+            // Update seats and after-party tickets
+            Map<String, Integer> seatTiers = new HashMap<>(concert.getSeatTiersMap());
+            seatTiers.put(request.getTier(), availableSeats - request.getCount());
+            concert.putAllSeatTiers(seatTiers);
+
+            if (request.getAfterParty()) {
+                concert.setAfterPartyTickets(availableAfterParty - request.getCount());
+            }
+
+            concerts.put(concertId, concert);
+
+            // Generate and save reservation
+            String reservationId = UUID.randomUUID().toString();
+            ConcertService.ReservationResponse reservation = ConcertService.ReservationResponse.newBuilder()
+                    .setSuccess(true)
+                    .setMessage("Bulk reservation successful.")
+                    .setReservationId(reservationId)
+                    .build();
+
+            reservations.put(reservationId, reservation);
+            saveData();
+
+            return reservation;
         }
     }
+
+    @Override
+    public void applyDiscount(ConcertService.ApplyDiscountRequest request, StreamObserver<ConcertService.ConcertResponse> responseObserver) {
+        System.out.println("[Command] Received applyDiscount request - Concert ID: " + request.getConcertId() +
+                ", Tier: " + request.getTier() + ", Discount: " + request.getDiscountPercentage() + "%");
+
+        boolean transactionStatus = false;
+        ConcertService.ConcertResponse response;
+
+        if (concertServer.isLeader()) {
+            try {
+                String operationId = "apply_discount_" + UUID.randomUUID();
+                startDistributedTx(operationId, request);
+                updateSecondaryServers(operationId, request);
+
+                transactionStatus = applyDiscountInternal(request); // apply discount before 2PC commit
+                ((DistributedTxCoordinator) concertServer.getTransaction()).perform();
+
+                if (!transactionStatus) {
+                    response = ConcertService.ConcertResponse.newBuilder()
+                            .setSuccess(false)
+                            .setMessage("Concert or tier not found.")
+                            .build();
+                } else {
+                    response = ConcertService.ConcertResponse.newBuilder()
+                            .setSuccess(true)
+                            .setMessage("Discount applied successfully.")
+                            .setConcert(concerts.get(request.getConcertId()).build())
+                            .build();
+                }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                response = ConcertService.ConcertResponse.newBuilder()
+                        .setSuccess(false)
+                        .setMessage("Error during discount: " + e.getMessage())
+                        .build();
+            }
+
+        } else {
+            if (request.getIsSentByPrimary()) {
+                try {
+                    String operationId = "apply_discount_" + UUID.randomUUID();
+                    startDistributedTx(operationId, request);
+                    transactionStatus = applyDiscountInternal(request); // must apply discount here
+                    ((DistributedTxParticipant) concertServer.getTransaction()).voteCommit();
+
+                    response = ConcertService.ConcertResponse.newBuilder()
+                            .setSuccess(transactionStatus)
+                            .setMessage(transactionStatus ? "Discount applied on secondary." : "Tier or concert not found.")
+                            .build();
+
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    response = ConcertService.ConcertResponse.newBuilder()
+                            .setSuccess(false)
+                            .setMessage("Error on secondary: " + e.getMessage())
+                            .build();
+                }
+            } else {
+                ConcertService.ConcertResponse primaryResponse = callPrimary(request);
+                responseObserver.onNext(primaryResponse);
+                responseObserver.onCompleted();
+                return;
+            }
+        }
+
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
+    }
+
+    private boolean applyDiscountInternal(ConcertService.ApplyDiscountRequest request) {
+        String concertId = request.getConcertId();
+        ConcertService.Concert.Builder concert = concerts.get(concertId);
+        if (concert == null) {
+            return false;
+        }
+
+        Map<String, Double> prices = new HashMap<>(concert.getPricesMap());
+        double discount = request.getDiscountPercentage();
+
+        if (request.getTier().isEmpty()) {
+            for (Map.Entry<String, Double> entry : prices.entrySet()) {
+                double newPrice = entry.getValue() * (1 - discount / 100.0);
+                prices.put(entry.getKey(), newPrice);
+            }
+        } else {
+            String tier = request.getTier();
+            if (!prices.containsKey(tier)) {
+                return false;
+            }
+            double newPrice = prices.get(tier) * (1 - discount / 100.0);
+            prices.put(tier, newPrice);
+        }
+
+        concert.putAllPrices(prices);
+        concerts.put(concertId, concert);
+        saveData();
+        return true;
+    }
+
 
     // Expose concerts map for query service
     public Map<String, ConcertService.Concert.Builder> getConcerts() {
         return concerts;
     }
 
+    @Override
+    public void onGlobalCommit() {
+        if (tempDataHolder != null) {
+            String operationId = tempDataHolder.getKey();
+            Object data = tempDataHolder.getValue();
+
+            // Handle the committed data based on operation type
+            if (operationId.startsWith("add_concert_")) {
+                ConcertService.Concert concert = (ConcertService.Concert) data;
+                concerts.put(concert.getId(), concert.toBuilder());
+            }
+
+            tempDataHolder = null;
+            saveData();
+        }
+    }
+
+    @Override
+    public void onGlobalAbort() {
+        tempDataHolder = null;
+        System.out.println("Transaction Aborted by the Coordinator");
+    }
 }

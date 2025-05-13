@@ -30,7 +30,7 @@ public class ConcertServer {
 
     public static void main(String[] args) throws Exception {
         DistributedLock.setZooKeeperURL("localhost:2181");
-        DistributedTx.setZooKeeperURL("localhost:2181"); // 2 face commit
+        DistributedTx.setZooKeeperURL("localhost:2181"); // 2 phase commit
 
          if (args.length < 3) {
             System.out.println("Usage: ConcertServer <port> <nameServiceAddress> <dataDir>");

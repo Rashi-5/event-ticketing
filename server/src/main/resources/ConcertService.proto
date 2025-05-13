@@ -22,6 +22,7 @@ service ConcertCommandService {
 
   // Coordinator APIs
   rpc BulkReserve(BulkReserveRequest) returns (ReservationResponse);
+  rpc applyDiscount(ApplyDiscountRequest) returns (ConcertResponse);
 }
 
 message Empty {}
@@ -33,6 +34,7 @@ message Concert {
   map<string, int32> seat_tiers = 4; // e.g., {"VIP": 50, "Regular": 200}
   int32 after_party_tickets = 5;
   map<string, double> prices = 6; // e.g., {"VIP": 100.0, "Regular": 50.0}
+  int32 maxTicketCount = 7;
 }
 
 message AddConcertRequest {
@@ -98,6 +100,13 @@ message ReservationResponse {
   bool success = 1;
   string message = 2;
   string reservation_id = 3;
+}
+
+message ApplyDiscountRequest {
+  string concert_id = 1;
+  string tier = 2; // Leave empty to apply to all tiers
+  double discount_percentage = 3;
+  bool is_sent_by_primary = 4;
 }
 
 message getConcertRequest {
